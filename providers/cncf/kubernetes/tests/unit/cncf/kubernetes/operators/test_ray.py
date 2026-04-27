@@ -179,5 +179,3 @@ class TestRayKubernetesOperator:
 
     def test_ui_color(self):
         assert RayKubernetesOperator.ui_color == "#028edd"
-
-

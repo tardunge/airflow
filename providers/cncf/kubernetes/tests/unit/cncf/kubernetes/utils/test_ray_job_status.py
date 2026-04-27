@@ -47,7 +47,10 @@ class TestRayJobStatus:
         ("job_status", "dep_status", "expected"),
         [
             pytest.param(RayJobStatus.SUCCEEDED, RayJobDeploymentStatus.COMPLETE, True, id="succeeded"),
-            pytest.param(RayJobStatus.SUCCEEDED, "", True, id="succeeded_no_dep"),
+            pytest.param(RayJobStatus.SUCCEEDED, "", False, id="succeeded_no_dep"),
+            pytest.param(
+                RayJobStatus.SUCCEEDED, RayJobDeploymentStatus.RUNNING, False, id="succeeded_intermediate"
+            ),
             pytest.param(RayJobStatus.FAILED, RayJobDeploymentStatus.FAILED, False, id="failed"),
             pytest.param(RayJobStatus.RUNNING, RayJobDeploymentStatus.RUNNING, False, id="running"),
             pytest.param(RayJobStatus.STOPPED, RayJobDeploymentStatus.COMPLETE, False, id="stopped"),

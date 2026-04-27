@@ -55,6 +55,4 @@ def is_ray_job_terminal(job_status: str, deployment_status: str) -> bool:
 
 def is_ray_job_successful(job_status: str, deployment_status: str) -> bool:
     """Check if a RayJob completed successfully."""
-    return job_status == RayJobStatus.SUCCEEDED or (
-        deployment_status == RayJobDeploymentStatus.COMPLETE and job_status == RayJobStatus.SUCCEEDED
-    )
+    return job_status == RayJobStatus.SUCCEEDED and deployment_status == RayJobDeploymentStatus.COMPLETE

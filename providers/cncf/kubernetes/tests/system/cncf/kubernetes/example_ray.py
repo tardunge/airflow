@@ -119,7 +119,7 @@ with DAG(
     # [END howto_operator_ray_kubernetes_fire_and_forget]
 
 
-from tests_common.test_utils.system_tests import get_test_run  # noqa: E402
+from tests_common.test_utils.system_tests import get_test_run
 
 # Needed to run the example DAG with pytest (see: contributing-docs/testing/system_tests.rst)
 test_run = get_test_run(dag)

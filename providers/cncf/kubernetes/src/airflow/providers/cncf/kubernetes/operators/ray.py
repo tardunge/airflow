@@ -20,16 +20,20 @@
 from __future__ import annotations
 
 import copy
+import json
 import time
+import urllib.error
+import urllib.request
 from functools import cached_property
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
+
+from slugify import slugify
 
 from airflow.providers.cncf.kubernetes import pod_generator
 from airflow.providers.cncf.kubernetes.hooks.kubernetes import KubernetesHook, _load_body_to_dict
 from airflow.providers.cncf.kubernetes.kubernetes_helper_functions import add_unique_suffix
 from airflow.providers.cncf.kubernetes.pod_generator import MAX_LABEL_LEN
-from airflow.providers.cncf.kubernetes.utils.pod_manager import PodManager
 from airflow.providers.cncf.kubernetes.utils.ray_job_status import (
     RayJobDeploymentStatus,
     is_ray_job_successful,
@@ -81,8 +85,6 @@ class RayKubernetesOperator(BaseOperator):
     template_ext = ("yaml", "yml", "json")
     ui_color = "#028edd"
 
-    BASE_CONTAINER_NAME = "ray-head"
-
     def __init__(
         self,
         *,
@@ -133,11 +135,6 @@ class RayKubernetesOperator(BaseOperator):
             cluster_context=self.cluster_context,
         )
 
-    @cached_property
-    def pod_manager(self) -> PodManager:
-        """Get PodManager for log streaming."""
-        return PodManager(kube_client=self.hook.core_v1_client)
-
     # --- Template & name handling ---
 
     def _parse_template(self) -> dict:
@@ -168,12 +165,12 @@ class RayKubernetesOperator(BaseOperator):
         return template_body
 
     def _create_job_name(self) -> str:
-        """Generate a unique, RFC 1123 compliant job name."""
+        """Generate a unique, DNS-1123-compliant RayJob name."""
         name = self.name or self.task_id
-        sanitized = pod_generator.make_safe_label_value(str(name).replace("_", "-"))
+        sanitized = slugify(str(name), lowercase=True)
         if self.random_name_suffix:
             return add_unique_suffix(name=sanitized, max_len=MAX_LABEL_LEN)
-        return sanitized[:MAX_LABEL_LEN]
+        return sanitized[:MAX_LABEL_LEN].strip(".-")
 
     @staticmethod
     def _get_ti_pod_labels(context: Context | None = None) -> dict[str, str]:
@@ -225,8 +222,8 @@ class RayKubernetesOperator(BaseOperator):
             namespace=self.namespace,
         )
 
-    def _get_ray_job_status(self) -> tuple[str, str]:
-        """Get current job and deployment status from the RayJob CRD."""
+    def _get_ray_job_status(self) -> tuple[str, str, str, str]:
+        """Get job status, deployment status, job ID, and dashboard URL from the RayJob CRD."""
         obj = self.hook.get_custom_object(
             group=RAY_API_GROUP,
             version=RAY_API_VERSION,
@@ -235,7 +232,12 @@ class RayKubernetesOperator(BaseOperator):
             namespace=self.namespace,
         )
         status = obj.get("status", {})
-        return status.get("jobStatus", ""), status.get("jobDeploymentStatus", "")
+        return (
+            status.get("jobStatus", ""),
+            status.get("jobDeploymentStatus", ""),
+            status.get("jobId", ""),
+            status.get("dashboardURL", ""),
+        )
 
     def _delete_ray_job(self) -> None:
         """Delete the RayJob CRD via KubernetesHook."""
@@ -291,14 +293,13 @@ class RayKubernetesOperator(BaseOperator):
         """Poll the RayJob status until terminal or timeout."""
         start_time = time.monotonic()
         cluster_ready = False
-        last_log_time = None
-        head_pod_cache: dict[str, Any] = {}
+        last_log_length = 0
 
         while True:
             elapsed = time.monotonic() - start_time
 
             try:
-                job_status, dep_status = self._get_ray_job_status()
+                job_status, dep_status, job_id, dashboard_url = self._get_ray_job_status()
             except Exception:
                 self.log.exception("Failed to get RayJob status for %s", self.ray_job_name)
                 raise
@@ -312,16 +313,16 @@ class RayKubernetesOperator(BaseOperator):
             )
 
             if is_ray_job_terminal(job_status, dep_status):
+                # Final log fetch before cluster teardown
+                if self.get_logs and job_id and dashboard_url:
+                    last_log_length = self._stream_logs(job_id, dashboard_url, last_log_length)
                 if is_ray_job_successful(job_status, dep_status):
                     return "SUCCEEDED"
                 raise AirflowException(f"RayJob failed — job: {job_status}, deployment: {dep_status}")
 
-            # Stream logs when running
-            if (
-                dep_status in (RayJobDeploymentStatus.RUNNING, RayJobDeploymentStatus.COMPLETE)
-                and self.get_logs
-            ):
-                last_log_time = self._stream_logs(last_log_time, head_pod_cache)
+            # Stream logs while running (terminal-state final fetch is handled above).
+            if dep_status == RayJobDeploymentStatus.RUNNING and self.get_logs and job_id and dashboard_url:
+                last_log_length = self._stream_logs(job_id, dashboard_url, last_log_length)
 
             # Startup timeout
             if not cluster_ready:
@@ -342,49 +343,29 @@ class RayKubernetesOperator(BaseOperator):
 
             time.sleep(self.poll_interval)
 
-    def _stream_logs(self, last_log_time: Any, head_pod_cache: dict) -> Any:
-        """Stream logs from the Ray head pod."""
+    def _fetch_job_logs_via_api(self, dashboard_url: str, job_id: str) -> str | None:
+        """Fetch job logs from the Ray Dashboard API."""
+        url = f"http://{dashboard_url}/api/jobs/{job_id}/logs"
         try:
-            obj = self.hook.get_custom_object(
-                group=RAY_API_GROUP,
-                version=RAY_API_VERSION,
-                plural=RAY_PLURAL,
-                name=self.ray_job_name,
-                namespace=self.namespace,
-            )
-            cluster_name = obj.get("status", {}).get("rayClusterName")
-            if not cluster_name:
-                return last_log_time
-
-            head_pod = head_pod_cache.get(cluster_name)
-            if head_pod and hasattr(head_pod, "status") and head_pod.status.phase != "Running":
-                head_pod_cache.pop(cluster_name, None)
-                head_pod = None
-
-            if not head_pod:
-                label_selector = f"ray.io/node-type=head,ray.io/cluster={cluster_name}"
-                pods = self.hook.core_v1_client.list_namespaced_pod(
-                    self.namespace, label_selector=label_selector
-                ).items
-                running = [p for p in pods if p.status.phase == "Running"]
-                if running:
-                    head_pod = running[0]
-                    head_pod_cache[cluster_name] = head_pod
-
-            if head_pod:
-                try:
-                    result = self.pod_manager.fetch_container_logs(
-                        pod=head_pod,
-                        container_name=self.BASE_CONTAINER_NAME,
-                        follow=False,
-                        since_time=last_log_time,
-                    )
-                    return result.last_log_time
-                except Exception:
-                    head_pod_cache.pop(cluster_name, None)
+            with urllib.request.urlopen(url, timeout=10) as resp:
+                data = json.loads(resp.read().decode())
+                return data.get("logs", "")
         except Exception as e:
-            self.log.debug("Error streaming logs: %s", e)
-        return last_log_time
+            self.log.debug("Failed to fetch job logs via API: %s", e)
+            return None
+
+    def _stream_logs(self, job_id: str, dashboard_url: str, last_log_length: int) -> int:
+        """Stream job logs from the Ray Dashboard API."""
+        if not job_id or not dashboard_url:
+            return last_log_length
+
+        logs = self._fetch_job_logs_via_api(dashboard_url, job_id)
+        if logs and len(logs) > last_log_length:
+            new_lines = logs[last_log_length:]
+            for line in new_lines.splitlines():
+                self.log.info("[ray-job] %s", line)
+            return len(logs)
+        return last_log_length
 
     # --- Execution ---
 
