@@ -58,8 +58,6 @@ class TestAwaitMessageFromListTrigger:
     async def test_trigger_run_succeed(self, mock_async_conn):
         mock_redis = AsyncMock()
         mock_redis.brpop.return_value = ("test_list", "test_data")
-        mock_redis.aclose = AsyncMock()
-
         mock_async_conn.return_value.__aenter__ = AsyncMock(return_value=mock_redis)
         mock_async_conn.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -81,8 +79,6 @@ class TestAwaitMessageFromListTrigger:
     async def test_trigger_run_with_bytes(self, mock_async_conn):
         mock_redis = AsyncMock()
         mock_redis.brpop.return_value = (b"test_list", b"test_data")
-        mock_redis.aclose = AsyncMock()
-
         mock_async_conn.return_value.__aenter__ = AsyncMock(return_value=mock_redis)
         mock_async_conn.return_value.__aexit__ = AsyncMock(return_value=False)
 
@@ -105,8 +101,6 @@ class TestAwaitMessageFromListTrigger:
         """Test that trigger checks multiple lists (priority queue behavior)."""
         mock_redis = AsyncMock()
         mock_redis.brpop.return_value = ("high_priority", "urgent_message")
-        mock_redis.aclose = AsyncMock()
-
         mock_async_conn.return_value.__aenter__ = AsyncMock(return_value=mock_redis)
         mock_async_conn.return_value.__aexit__ = AsyncMock(return_value=False)
 

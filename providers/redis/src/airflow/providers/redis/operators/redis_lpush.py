@@ -33,7 +33,10 @@ class RedisLPushOperator(BaseOperator):
 
     This operator pushes a message to the head (left) of a Redis list.
     Combined with BRPOP on the consumer side, this provides a FIFO queue pattern
-    with durable, exactly-once delivery semantics.
+    where messages are durable until consumed and BRPOP removes them atomically.
+    Note that BRPOP gives at-most-once delivery: a consumer crash after pop loses
+    the message. For at-least-once semantics, build an ack pattern on top
+    (e.g. ``BLMOVE`` to a processing list, ``LREM`` after successful handling).
 
     :param list_name: redis list to push the message to (templated)
     :param message: the message to push (templated)

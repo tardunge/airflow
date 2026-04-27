@@ -24,6 +24,7 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from redis import Redis
+from redis.asyncio import Redis as AsyncRedis
 
 from airflow.providers.common.compat.sdk import BaseHook
 
@@ -113,8 +114,6 @@ class RedisHook(BaseHook):
             async with hook.get_async_conn() as redis_conn:
                 await redis_conn.brpop("my_list", timeout=10)
         """
-        from redis.asyncio import Redis as AsyncRedis
-
         conn = self.get_connection(self.redis_conn_id)
         host = conn.host
         port = conn.port

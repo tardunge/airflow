@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 from unittest import mock
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -82,3 +83,73 @@ class TestRedisHook:
         hook = RedisHook(redis_conn_id="redis_default")
         hook.get_conn()
         assert hook.password is None
+
+    @pytest.mark.asyncio
+    @mock.patch("airflow.providers.redis.hooks.redis.AsyncRedis")
+    @mock.patch("airflow.providers.redis.hooks.redis.RedisHook.get_connection")
+    async def test_get_async_conn_with_extra_config(self, mock_get_connection, mock_async_redis):
+        connection = Connection(
+            login="user",
+            password="password",
+            host="remote_host",
+            port=1234,
+        )
+        connection.set_extra(
+            """{
+                "db": 2,
+                "ssl": true,
+                "ssl_cert_reqs": "required",
+                "ssl_ca_certs": "/path/to/custom/ca-cert",
+                "ssl_keyfile": "/path/to/key-file",
+                "ssl_certfile": "/path/to/cert-file",
+                "ssl_check_hostname": true
+            }"""
+        )
+        mock_get_connection.return_value = connection
+        mock_async_redis.return_value.close = AsyncMock()
+        hook = RedisHook()
+
+        async with hook.get_async_conn() as conn:
+            assert conn is mock_async_redis.return_value
+
+        mock_async_redis.assert_called_once_with(
+            host=connection.host,
+            port=connection.port,
+            username=connection.login,
+            password=connection.password,
+            db=connection.extra_dejson["db"],
+            decode_responses=True,
+            ssl=connection.extra_dejson["ssl"],
+            ssl_cert_reqs=connection.extra_dejson["ssl_cert_reqs"],
+            ssl_ca_certs=connection.extra_dejson["ssl_ca_certs"],
+            ssl_keyfile=connection.extra_dejson["ssl_keyfile"],
+            ssl_certfile=connection.extra_dejson["ssl_certfile"],
+            ssl_check_hostname=connection.extra_dejson["ssl_check_hostname"],
+        )
+
+    @pytest.mark.asyncio
+    @mock.patch("airflow.providers.redis.hooks.redis.AsyncRedis")
+    @mock.patch("airflow.providers.redis.hooks.redis.RedisHook.get_connection")
+    async def test_get_async_conn_closes_on_exit(self, mock_get_connection, mock_async_redis):
+        mock_get_connection.return_value = Connection(host="localhost", port=6379)
+        mock_async_redis.return_value.close = AsyncMock()
+        hook = RedisHook()
+
+        async with hook.get_async_conn():
+            pass
+
+        mock_async_redis.return_value.close.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    @mock.patch("airflow.providers.redis.hooks.redis.AsyncRedis")
+    @mock.patch("airflow.providers.redis.hooks.redis.RedisHook.get_connection")
+    async def test_get_async_conn_closes_on_exception(self, mock_get_connection, mock_async_redis):
+        mock_get_connection.return_value = Connection(host="localhost", port=6379)
+        mock_async_redis.return_value.close = AsyncMock()
+        hook = RedisHook()
+
+        with pytest.raises(RuntimeError, match="boom"):
+            async with hook.get_async_conn():
+                raise RuntimeError("boom")
+
+        mock_async_redis.return_value.close.assert_awaited_once()

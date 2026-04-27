@@ -17,7 +17,7 @@
 # under the License.
 from __future__ import annotations
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 from airflow.models.dag import DAG
 from airflow.providers.redis.operators.redis_lpush import RedisLPushOperator
@@ -30,7 +30,7 @@ class TestRedisLPushOperator:
     def setup_method(self):
         args = {"owner": "airflow", "start_date": DEFAULT_DATE}
         self.dag = DAG("test_dag_id", schedule=None, default_args=args)
-        self.mock_context = MagicMock()
+        self.mock_context: dict = {}
 
     @patch("airflow.providers.redis.hooks.redis.RedisHook.get_conn")
     def test_execute_operator(self, mock_redis_conn):

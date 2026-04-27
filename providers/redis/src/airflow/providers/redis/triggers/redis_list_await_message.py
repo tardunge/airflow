@@ -30,7 +30,9 @@ class AwaitMessageFromListTrigger(BaseTrigger):
 
     Unlike pub/sub, list-based messaging provides:
     - **Durability**: messages persist in the list until consumed
-    - **Exactly-once delivery**: BRPOP atomically removes and returns the message
+    - **Atomic consumption**: BRPOP atomically removes and returns the message
+      (at-most-once delivery — a consumer crash after pop loses the message; for
+      at-least-once semantics, build an ack pattern on top using ``BLMOVE`` and ``LREM``)
     - **Priority queues**: when multiple lists are provided, they are checked in order
 
     :param lists: The Redis list name(s) to monitor. When multiple lists are provided,

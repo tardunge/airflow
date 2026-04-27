@@ -36,8 +36,10 @@ class RedisListMessageQueueProvider(BaseMessageQueueProvider):
 
     Unlike ``redis+pubsub``, list-based queues provide:
 
-    * **Durability**: Messages persist in the list until consumed (no message loss).
-    * **Exactly-once delivery**: BRPOP atomically removes and returns the message.
+    * **Durability**: Messages persist in the list until consumed.
+    * **Atomic consumption**: BRPOP atomically removes and returns the message
+      (at-most-once delivery — a consumer crash after pop loses the message; build
+      an ack pattern on top with ``BLMOVE`` and ``LREM`` if you need at-least-once).
     * **Priority queues**: Multiple lists are checked in order.
 
     .. code-block:: python
